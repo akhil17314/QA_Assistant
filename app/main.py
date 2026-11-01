@@ -144,6 +144,11 @@ if question:
             )
         except Exception as error:
             if "429" in str(error) or "rate" in str(error).lower():
-                st.error("Gemini rate limit reached. Wait briefly and try again.")
+                st.error(
+                    "Gemini's free-tier rate limit was reached. A document question can use "
+                    "several model requests; wait about a minute before retrying and avoid "
+                    "resubmitting while the request is still running. Check the quota for "
+                    "your selected model if this continues."
+                )
             else:
                 st.error(f"The request could not be completed: {error}")
