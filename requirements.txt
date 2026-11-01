@@ -1,0 +1,19 @@
+# Runtime dependencies, pinned for repeatable local and Spaces installs.
+chromadb==1.0.20
+langchain==0.3.27
+langchain-chroma==0.2.6
+langchain-community==0.3.29
+langchain-google-genai==2.1.10
+langchain-huggingface==0.3.1
+langgraph==0.6.6
+pydantic==2.11.7
+pydantic-settings==2.10.1
+pypdf==6.0.0
+sentence-transformers==5.1.0
+streamlit==1.49.1
+
+# Evaluation, testing, and code quality.
+ragas==0.3.4
+pytest==8.4.2
+ruff==0.13.1
+black==25.1.0

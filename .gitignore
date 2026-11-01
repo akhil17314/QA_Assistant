@@ -1,0 +1,12 @@
+.env
+.venv/
+.venv311/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+chroma_db/
+evals/results/*.json
+!evals/results/baseline.json
+data/uploads/
