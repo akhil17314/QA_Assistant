@@ -1,5 +1,6 @@
 """Lazy Gemini model construction with bounded retry, jitter, and call tracking."""
 
+import logging
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from collections.abc import Iterator
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 _active_call_counter: ContextVar[list[int] | None] = ContextVar(
     "active_llm_call_counter", default=None
@@ -30,7 +32,11 @@ class _CallCounter(BaseCallbackHandler):
     def on_chat_model_start(
         self, serialized: dict, messages: list[list[object]], **kwargs: object
     ) -> None:
+        logger.info("LLM call started")
         self._increment()
+
+    def on_llm_error(self, error: BaseException, **kwargs: object) -> None:
+        logger.warning("LLM call failed: %s: %s", type(error).__name__, error)
 
 
 _call_counter = _CallCounter()
@@ -59,6 +65,7 @@ def _create_chat_model(model: str | None, temperature: float) -> Any:
         temperature=temperature,
         google_api_key=settings.google_api_key,
         max_retries=0,
+        timeout=60,
     )
 
 

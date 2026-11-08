@@ -1,5 +1,6 @@
 """PDF parsing, page-aware chunking, and deterministic Chroma indexing."""
 
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -74,15 +75,29 @@ def get_embeddings() -> Any:
     return HuggingFaceEmbeddings(model_name=settings.embedding_model)
 
 
-def get_vector_store(persist_directory: str | Path | None = None) -> Any:
-    """Open the persistent Chroma docs collection."""
+_vector_store_lock = threading.Lock()
+
+
+@lru_cache(maxsize=None)
+def _open_vector_store(directory: str) -> Any:
     from langchain_chroma import Chroma
 
     return Chroma(
         collection_name="docs",
         embedding_function=get_embeddings(),
-        persist_directory=str(persist_directory or settings.chroma_dir),
+        persist_directory=directory,
     )
+
+
+def get_vector_store(persist_directory: str | Path | None = None) -> Any:
+    """Open the persistent Chroma docs collection once per directory.
+
+    Creating several PersistentClients concurrently (Streamlit reruns/threads)
+    breaks chromadb's Rust bindings, so clients are cached and creation is locked.
+    """
+    directory = str(persist_directory or settings.chroma_dir)
+    with _vector_store_lock:
+        return _open_vector_store(directory)
 
 
 def build_index(chunks: list[Chunk], persist_directory: str | Path | None = None) -> None:

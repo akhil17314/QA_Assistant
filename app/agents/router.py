@@ -1,6 +1,8 @@
 """Structured document-scope classification."""
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, field_validator
 
 from app.llm import get_structured_llm
 from app.prompts import ROUTER_PROMPT
@@ -9,8 +11,15 @@ from app.prompts import ROUTER_PROMPT
 class RouteDecision(BaseModel):
     """Scope decision returned by the router model."""
 
-    route: str = Field(pattern="^(in_scope|off_topic)$")
+    route: Literal["in_scope", "off_topic"]
     reason: str = ""
+
+    @field_validator("route", mode="before")
+    @classmethod
+    def _normalize_route(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower().replace("-", "_").replace(" ", "_")
+        return value
 
 
 def route_query(query: str) -> RouteDecision:

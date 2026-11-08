@@ -8,12 +8,6 @@ from app.prompts import CLAIM_EXTRACTION_PROMPT, GROUNDING_JUDGE_PROMPT
 from app.state import AnswerOutput
 
 
-class ClaimSet(BaseModel):
-    """Atomic claims extracted from an answer."""
-
-    claims: list[str] = Field(default_factory=list)
-
-
 class ClaimVerdict(BaseModel):
     """Judge result for one atomic claim."""
 
@@ -35,19 +29,15 @@ def check_grounding(answer: AnswerOutput, chunks: list[dict]) -> tuple[bool, str
         ("i don't know", "i do not know", "the documents do not contain")
     ):
         return True, "The answer explicitly abstains because the documents do not provide it."
-    llm = get_structured_llm(ClaimSet, model=settings.judge_model)
-    claims = llm.invoke(f"{CLAIM_EXTRACTION_PROMPT}\n\nAnswer:\n{answer.answer}")
-    if not claims.claims:
-        return True, "No factual claims were identified."
-    context = _format_chunks(chunks)
     judge = get_structured_llm(GroundingVerdict, model=settings.judge_model)
     result = judge.invoke(
-        f"{GROUNDING_JUDGE_PROMPT}\n\nClaims:\n{claims.model_dump_json()}\n\n"
-        f"Document excerpts:\n{context}"
+        f"{CLAIM_EXTRACTION_PROMPT}\n{GROUNDING_JUDGE_PROMPT}\n\n"
+        f"Answer:\n{answer.answer}\n\nDocument excerpts:\n{_format_chunks(chunks)}"
     )
+    if not result.verdicts:
+        return True, "No factual claims were identified."
     unsupported = [item.claim for item in result.verdicts if not item.supported]
-    all_claims_checked = len(result.verdicts) == len(claims.claims)
-    grounded = not unsupported and all_claims_checked
+    grounded = not unsupported
     report = result.report or (
         "All claims are supported." if grounded else "Unsupported claims: " + "; ".join(unsupported)
     )

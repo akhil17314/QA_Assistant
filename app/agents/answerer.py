@@ -36,7 +36,11 @@ def answer_question(query: str, chunks: list[dict]) -> AnswerOutput:
             )
         except Exception as error:
             logger.warning(
-                "Answer parsing failed on attempt %s: %s", attempt + 1, type(error).__name__
+                "Answer generation failed on attempt %s: %s: %s",
+                attempt + 1,
+                type(error).__name__,
+                error,
+                exc_info=True,
             )
     return AnswerOutput(
         answer="I could not produce a validated answer from the available documents.",

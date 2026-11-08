@@ -1,8 +1,13 @@
 """Streamlit interface for document ingestion and cited Q&A."""
 
 import logging
+import sys
 import tempfile
 from pathlib import Path
+
+project_root = str(Path(__file__).resolve().parents[1])
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 import streamlit as st
 
@@ -12,7 +17,7 @@ from app.graph import run_query
 from app.ingest import ingest_file
 from app.state import AnswerOutput
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, force=True)
 logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Document Q&A", page_icon="D", layout="wide")
@@ -143,6 +148,7 @@ if question:
                 }
             )
         except Exception as error:
+            logger.exception("Query failed for question: %r", question)
             if "429" in str(error) or "rate" in str(error).lower():
                 st.error(
                     "Gemini's free-tier rate limit was reached. A document question can use "

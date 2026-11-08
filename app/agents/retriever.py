@@ -1,10 +1,13 @@
 """Page-aware similarity retrieval from the local Chroma collection."""
 
+import logging
 from functools import lru_cache
 from typing import Any
 
 from app.config import settings
 from app.ingest import get_vector_store
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -19,6 +22,7 @@ def has_documents() -> bool:
     try:
         return get_vector_store()._collection.count() > 0
     except Exception:
+        logger.exception("has_documents failed")
         return False
 
 
@@ -44,6 +48,7 @@ def retrieve(query: str, k: int | None = None) -> list[dict]:
             query, k=count * 3 if settings.use_reranker else count
         )
     except Exception:
+        logger.exception("Retrieval failed")
         return []
 
     results = [

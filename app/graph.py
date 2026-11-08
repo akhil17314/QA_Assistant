@@ -1,5 +1,6 @@
 """LangGraph orchestration with conditional guard, scope, and grounding routes."""
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -15,6 +16,8 @@ from app.guardrails.input_guard import check_input, sanitize_input
 from app.guardrails.output_guard import redact_secrets
 from app.llm import track_llm_calls
 from app.state import AnswerOutput, GraphState
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,7 @@ def build_graph(services: GraphServices | None = None) -> Any:
         query = sanitize_input(state.get("query", ""))
         verdict, reason = agents.input_check(query)
         return {"query": query, "input_verdict": verdict, "block_reason": reason}
+
 
     def refuse(state: GraphState) -> dict:
         reason = state.get("block_reason", "")
@@ -147,7 +151,15 @@ def build_graph(services: GraphServices | None = None) -> Any:
 
 def run_query(query: str, services: GraphServices | None = None) -> GraphState:
     """Execute a user query and return the final graph state."""
+    logger.info("run_query start: %r", query)
     with track_llm_calls() as call_count:
         result = build_graph(services).invoke({"query": query, "retries": 0})
     result["llm_calls"] = call_count[0]
+    logger.info(
+        "run_query done: route=%s grounded=%s retries=%s llm_calls=%s",
+        result.get("route"),
+        result.get("grounded"),
+        result.get("retries"),
+        call_count[0],
+    )
     return result

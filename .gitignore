@@ -10,3 +10,5 @@ chroma_db/
 evals/results/*.json
 !evals/results/baseline.json
 data/uploads/
+Makefile
+Project 1 - Document Q&A Multi-Agent Assistant (Developer Spec for GitHub Copilo.md
