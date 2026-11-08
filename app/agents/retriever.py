@@ -5,7 +5,7 @@ from functools import lru_cache
 from typing import Any
 
 from app.config import settings
-from app.ingest import get_vector_store
+from app.ingest import DEFAULT_COLLECTION, get_vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -17,31 +17,35 @@ def _get_reranker() -> Any:
     return CrossEncoder(settings.reranker_model)
 
 
-def has_documents() -> bool:
-    """Return whether the configured Chroma collection contains documents."""
+def has_documents(collection: str = DEFAULT_COLLECTION) -> bool:
+    """Return whether the session's Chroma collection contains documents."""
     try:
-        return get_vector_store()._collection.count() > 0
+        return get_vector_store(collection)._collection.count() > 0
     except Exception:
         logger.exception("has_documents failed")
         return False
 
 
-def indexed_sources() -> list[str]:
-    """Return distinct source names currently present in the index."""
+def indexed_sources(collection: str = DEFAULT_COLLECTION) -> list[str]:
+    """Return distinct source names currently present in the session's index."""
     try:
-        metadata = get_vector_store()._collection.get(include=["metadatas"]).get("metadatas") or []
+        metadata = get_vector_store(collection)._collection.get(include=["metadatas"]).get(
+            "metadatas"
+        ) or []
     except Exception:
         return []
     return sorted({item["source"] for item in metadata if item and item.get("source")})
 
 
-def retrieve(query: str, k: int | None = None) -> list[dict]:
+def retrieve(
+    query: str, k: int | None = None, collection: str = DEFAULT_COLLECTION
+) -> list[dict]:
     """Return text, source, page, and relevance score for the best matching chunks."""
     count = k or settings.top_k
     if not query.strip() or count < 1:
         return []
     try:
-        store = get_vector_store()
+        store = get_vector_store(collection)
         if store._collection.count() == 0:
             return []
         matches = store.similarity_search_with_relevance_scores(

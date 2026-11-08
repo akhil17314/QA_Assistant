@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     top_k: int = Field(default=6, ge=1)
     top_k_retry: int = Field(default=10, ge=1)
     max_retries: int = Field(default=1, ge=0)
-    chroma_dir: str = "./chroma_db"
     use_reranker: bool = False
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     langfuse_public_key: str | None = None

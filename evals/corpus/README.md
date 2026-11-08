@@ -8,4 +8,4 @@
 - Published: June 2022
 - License: IETF Trust Legal Provisions, current TLP 5.0. The official PDF is redistributed unmodified and retains its copyright and license notices. See https://trustee.ietf.org/license-info/.
 
-The application ingests PDFs in this directory on startup when the Chroma index is empty. Evaluation labels in `evals/dataset.jsonl` use the PDF's one-based physical page numbers.
+The eval runner indexes PDFs in this directory into a temporary in-memory collection. The application itself does not ingest them. Evaluation labels in `evals/dataset.jsonl` use the PDF's one-based physical page numbers.

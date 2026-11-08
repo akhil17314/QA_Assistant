@@ -78,29 +78,48 @@ def get_embeddings() -> Any:
 _vector_store_lock = threading.Lock()
 
 
+DEFAULT_COLLECTION = "docs"
+
+
 @lru_cache(maxsize=None)
-def _open_vector_store(directory: str) -> Any:
+def _open_vector_store(collection_name: str, directory: str | None) -> Any:
     from langchain_chroma import Chroma
 
     return Chroma(
-        collection_name="docs",
+        collection_name=collection_name,
         embedding_function=get_embeddings(),
         persist_directory=directory,
     )
 
 
-def get_vector_store(persist_directory: str | Path | None = None) -> Any:
-    """Open the persistent Chroma docs collection once per directory.
+def get_vector_store(
+    collection_name: str = DEFAULT_COLLECTION, persist_directory: str | Path | None = None
+) -> Any:
+    """Open a Chroma collection once per (name, directory).
 
-    Creating several PersistentClients concurrently (Streamlit reruns/threads)
-    breaks chromadb's Rust bindings, so clients are cached and creation is locked.
+    Without a persist directory the collection is in-memory, so each app session
+    (which owns a unique collection name) starts empty and never sees other sessions' files.
+    Clients are cached and creation is locked because concurrent creation under
+    Streamlit reruns/threads breaks chromadb's Rust bindings.
     """
-    directory = str(persist_directory or settings.chroma_dir)
+    directory = str(persist_directory) if persist_directory else None
     with _vector_store_lock:
-        return _open_vector_store(directory)
+        return _open_vector_store(collection_name, directory)
 
 
-def build_index(chunks: list[Chunk], persist_directory: str | Path | None = None) -> None:
+def clear_collection(collection_name: str = DEFAULT_COLLECTION) -> None:
+    """Delete every chunk in a collection."""
+    collection = get_vector_store(collection_name)._collection
+    indexed_ids = collection.get().get("ids", [])
+    if indexed_ids:
+        collection.delete(ids=indexed_ids)
+
+
+def build_index(
+    chunks: list[Chunk],
+    collection_name: str = DEFAULT_COLLECTION,
+    persist_directory: str | Path | None = None,
+) -> None:
     """Upsert chunks using stable source/page/index IDs to prevent duplicates."""
     if not chunks:
         return
@@ -111,11 +130,15 @@ def build_index(chunks: list[Chunk], persist_directory: str | Path | None = None
         for chunk in chunks
     ]
     ids = [f"{chunk.source}-{chunk.page}-{chunk_index}" for chunk_index, chunk in enumerate(chunks)]
-    get_vector_store(persist_directory).add_documents(documents=documents, ids=ids)
+    get_vector_store(collection_name, persist_directory).add_documents(documents=documents, ids=ids)
 
 
-def ingest_file(path: str | Path, persist_directory: str | Path | None = None) -> int:
+def ingest_file(
+    path: str | Path,
+    collection_name: str = DEFAULT_COLLECTION,
+    persist_directory: str | Path | None = None,
+) -> int:
     """Parse, chunk, and index a PDF; return the number of chunks processed."""
     chunks = chunk_pages(load_pdf(path))
-    build_index(chunks, persist_directory)
+    build_index(chunks, collection_name, persist_directory)
     return len(chunks)

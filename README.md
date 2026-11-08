@@ -15,16 +15,17 @@ A local-first, multi-agent RAG application for asking questions about uploaded P
 
 ```mermaid
 flowchart TD
-	START([Start]) --> IG[Input guard]
+	START([Start]) --> IG[Input rules guard]
 	IG -->|blocked| REF[Refuse]
-	IG -->|safe| RT[Scope router]
+	IG -->|safe| RT[One LLM call: safety + scope + standalone query]
+	RT -->|unsafe| REF
 	REF --> END([End])
 	RT -->|off topic or empty index| DEC[Decline / request upload]
 	RT -->|in scope| RET[Retrieve top-k]
 	RET --> ANS[Structured answer with citations]
 	ANS --> GC[Claim grounding check]
 	GC -->|grounded| FIN[Finalize]
-	GC -->|not grounded, retry available| WR[Rewrite and widen retrieval]
+	GC -->|not grounded, retry available| WR[Widen retrieval]
 	WR --> ANS
 	GC -->|retry exhausted| FB[Fixed abstention]
 	DEC --> END
@@ -51,7 +52,7 @@ python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Add a Gemini API key to `.env` as `GOOGLE_API_KEY=...`. Set `LLM_MODEL` and `JUDGE_MODEL` to a currently available Gemini Flash model if the sample defaults have expired. Put one or two public PDFs in `data/sample/`; document their title, source URL, and license in `data/sample/README.md`. On startup, PDFs in that folder are indexed automatically when the Chroma collection is empty. Uploaded PDFs can also be ingested from the sidebar.
+Add a Gemini API key to `.env` as `GOOGLE_API_KEY=...`. Set `LLM_MODEL` and `JUDGE_MODEL` to a currently available Gemini Flash model if the sample defaults have expired. Nothing is indexed automatically: upload PDFs from the sidebar. Each browser session gets its own in-memory index and chat memory, so a new or reloaded session starts empty. "Clear index" removes the session's documents and its conversation memory. PDFs in `evals/corpus/` are only used by the eval runner.
 
 Run the app:
 
@@ -59,7 +60,7 @@ Run the app:
 streamlit run app/main.py
 ```
 
-Or use `make run` in a Unix-like shell. Chroma persists under `CHROMA_DIR` (default `./chroma_db`). The embedding model downloads from Hugging Face the first time it is used.
+Or use `make run` in a Unix-like shell. Indexes are in-memory per session and are lost when the server restarts. The embedding model downloads from Hugging Face the first time it is used.
 
 ## Tests and Evals
 
@@ -68,7 +69,7 @@ python -m pytest
 python evals/run_evals.py --ci
 ```
 
-The unit tests do not call Gemini or require API keys. The eval runner requires `GOOGLE_API_KEY`, at least one PDF in `data/sample/`, and 30 hand-verified records in `evals/dataset.jsonl`; it reports missing prerequisites without making model calls. Safety fixtures are in `evals/attacks.jsonl` and `evals/benign_edge.jsonl`. The CI workflow runs unit tests and the quota-limited eval suite; configure the `GOOGLE_API_KEY` repository secret before enabling evaluations on pull requests.
+The unit tests do not call Gemini or require API keys. The eval runner requires `GOOGLE_API_KEY`, at least one PDF in `evals/corpus/`, and 30 hand-verified records in `evals/dataset.jsonl`; it reports missing prerequisites without making model calls. Safety fixtures are in `evals/attacks.jsonl` and `evals/benign_edge.jsonl`. The CI workflow runs unit tests and the quota-limited eval suite; configure the `GOOGLE_API_KEY` repository secret before enabling evaluations on pull requests.
 
 Initial thresholds are Hit Rate@4 >= 0.80, RAGAS Faithfulness >= 0.85, attack block rate >= 0.90, false-positive rate <= 0.10, and abstention accuracy >= 0.70. Evaluation results are written to `evals/results/` and uploaded as a workflow artifact.
 

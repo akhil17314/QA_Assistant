@@ -3,6 +3,7 @@
 import logging
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 project_root = str(Path(__file__).resolve().parents[1])
@@ -14,7 +15,7 @@ import streamlit as st
 from app.agents.retriever import has_documents, indexed_sources
 from app.config import settings
 from app.graph import run_query
-from app.ingest import ingest_file
+from app.ingest import clear_collection, ingest_file
 from app.state import AnswerOutput
 
 logging.basicConfig(level=logging.INFO, force=True)
@@ -26,23 +27,26 @@ st.caption("Ask questions grounded in your uploaded PDFs.")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "collection" not in st.session_state:
+    # A fresh collection per browser session keeps sessions isolated from each other.
+    st.session_state.collection = f"session-{uuid.uuid4().hex}"
+collection = st.session_state.collection
 
 
-def ingest_samples_once() -> None:
-    """Seed an empty index from PDFs shipped in data/sample, when available."""
-    if st.session_state.get("skip_sample_seed") or has_documents():
-        return
-    sample_dir = Path(__file__).resolve().parents[1] / "data" / "sample"
-    for pdf_path in sorted(sample_dir.glob("*.pdf")):
-        try:
-            ingest_file(pdf_path)
-        except Exception as error:
-            logger.warning(
-                "Could not ingest sample PDF %s: %s", pdf_path.name, type(error).__name__
-            )
+def chat_history() -> list[dict]:
+    """Prior turns used as conversation context, excluding refused messages."""
+    messages = st.session_state.messages
+    history = []
+    for index, message in enumerate(messages):
+        if message["role"] == "assistant" and message.get("block_reason"):
+            continue
+        if message["role"] == "user" and index + 1 < len(messages):
+            reply = messages[index + 1]
+            if reply["role"] == "assistant" and reply.get("block_reason"):
+                continue
+        history.append({"role": message["role"], "content": message["content"]})
+    return history
 
-
-ingest_samples_once()
 
 with st.sidebar:
     st.header("Documents")
@@ -58,13 +62,13 @@ with st.sidebar:
                     temporary_path = Path(temporary_directory) / safe_name
                     temporary_path.write_bytes(uploaded.getvalue())
                     try:
-                        chunk_count = ingest_file(temporary_path)
+                        chunk_count = ingest_file(temporary_path, collection)
                         st.success(f"Indexed {safe_name}: {chunk_count} chunks")
                     except Exception as error:
                         st.error(f"Could not ingest {safe_name}: {error}")
                 progress.progress(index / len(uploaded_files))
 
-    sources = indexed_sources()
+    sources = indexed_sources(collection)
     st.subheader("Indexed files")
     if sources:
         for source in sources:
@@ -74,13 +78,7 @@ with st.sidebar:
 
     if st.button("Clear index", use_container_width=True):
         try:
-            st.session_state.skip_sample_seed = True
-            from app.ingest import get_vector_store
-
-            collection = get_vector_store()._collection
-            indexed_ids = collection.get().get("ids", [])
-            if indexed_ids:
-                collection.delete(ids=indexed_ids)
+            clear_collection(collection)
             st.session_state.messages = []
             st.rerun()
         except Exception as error:
@@ -88,7 +86,7 @@ with st.sidebar:
 
 if not settings.google_api_key:
     st.error("GOOGLE_API_KEY is missing. Add it to your .env file to enable chat.")
-if not has_documents():
+if not has_documents(collection):
     st.info("Upload and ingest a PDF to start asking questions.")
 
 for message in st.session_state.messages:
@@ -110,12 +108,13 @@ for message in st.session_state.messages:
 
 question = st.chat_input("Ask a question about your documents")
 if question:
+    history = chat_history()
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
     with st.chat_message("assistant"):
         try:
-            result = run_query(question)
+            result = run_query(question, history=history, collection=collection)
             response = result.get("final_response", "No response was produced.")
             st.markdown(response)
             answer = result.get("answer")

@@ -25,6 +25,8 @@ class GraphState(TypedDict, total=False):
     """State passed between LangGraph nodes."""
 
     query: str
+    history: list[dict]
+    collection: str
     retrieval_query: str
     input_verdict: Literal["safe", "blocked"]
     block_reason: str

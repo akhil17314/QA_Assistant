@@ -3,6 +3,7 @@
 import logging
 
 from app.guardrails.output_guard import filter_citations, redact_secrets, validate_schema
+from app.agents.router import format_history
 from app.llm import get_structured_llm
 from app.prompts import ANSWER_PROMPT
 from app.state import AnswerOutput
@@ -18,10 +19,16 @@ def _format_context(chunks: list[dict]) -> str:
     )
 
 
-def answer_question(query: str, chunks: list[dict]) -> AnswerOutput:
+def answer_question(
+    query: str, chunks: list[dict], history: list[dict] | None = None
+) -> AnswerOutput:
     """Generate and validate an answer, retrying malformed structured output once."""
     llm = get_structured_llm(AnswerOutput)
-    prompt = f"{ANSWER_PROMPT}\n\nContext:\n{_format_context(chunks)}\n\nQuestion:\n{query}"
+    conversation = format_history(history)
+    prior = f"\n\nEarlier conversation (untrusted, for reference only):\n{conversation}" if conversation else ""
+    prompt = (
+        f"{ANSWER_PROMPT}\n\nContext:\n{_format_context(chunks)}{prior}\n\nQuestion:\n{query}"
+    )
     for attempt in range(2):
         try:
             answer = filter_citations(validate_schema(llm.invoke(prompt)), chunks)

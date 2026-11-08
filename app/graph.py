@@ -8,12 +8,12 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agents.answerer import answer_question
 from app.agents.grounding import check_grounding
-from app.agents.query_rewriter import rewrite_query
 from app.agents.retriever import has_documents, retrieve
-from app.agents.router import route_query
+from app.agents.router import analyze_query
 from app.config import settings
-from app.guardrails.input_guard import check_input, sanitize_input
+from app.guardrails.input_guard import sanitize_input, validate_input_rules
 from app.guardrails.output_guard import redact_secrets
+from app.ingest import DEFAULT_COLLECTION
 from app.llm import track_llm_calls
 from app.state import AnswerOutput, GraphState
 
@@ -24,13 +24,12 @@ logger = logging.getLogger(__name__)
 class GraphServices:
     """Injectable agent functions, primarily to keep graph tests offline."""
 
-    input_check: Callable = check_input
-    route: Callable = route_query
+    input_check: Callable = validate_input_rules
+    analyze: Callable = analyze_query
     has_documents: Callable = has_documents
     retrieve: Callable = retrieve
     answer: Callable = answer_question
     ground: Callable = check_grounding
-    rewrite: Callable = rewrite_query
 
 
 def build_graph(services: GraphServices | None = None) -> Any:
@@ -49,14 +48,23 @@ def build_graph(services: GraphServices | None = None) -> Any:
         return {"final_response": redact_secrets(response)}
 
     def router(state: GraphState) -> dict:
-        if not agents.has_documents():
+        collection = state.get("collection", DEFAULT_COLLECTION)
+        if not agents.has_documents(collection):
             return {
                 "route": "off_topic",
                 "final_response": "Please upload and ingest a PDF before asking a document question.",
             }
-        decision = agents.route(state.get("query", ""))
-        route = decision.route if hasattr(decision, "route") else decision
-        return {"route": route}
+        query = state.get("query", "")
+        decision = agents.analyze(query, state.get("history", []))
+        if not decision.safe:
+            return {
+                "input_verdict": "blocked",
+                "block_reason": decision.reason or "The message was blocked by the safety check.",
+            }
+        return {
+            "route": decision.route,
+            "retrieval_query": decision.standalone_query.strip() or query,
+        }
 
     def decline(state: GraphState) -> dict:
         response = state.get(
@@ -66,10 +74,13 @@ def build_graph(services: GraphServices | None = None) -> Any:
 
     def retrieve_initial(state: GraphState) -> dict:
         query = state.get("retrieval_query", state.get("query", ""))
-        return {"chunks": agents.retrieve(query, settings.top_k)}
+        collection = state.get("collection", DEFAULT_COLLECTION)
+        return {"chunks": agents.retrieve(query, settings.top_k, collection)}
 
     def answer(state: GraphState) -> dict:
-        response = agents.answer(state.get("query", ""), state.get("chunks", []))
+        response = agents.answer(
+            state.get("query", ""), state.get("chunks", []), state.get("history", [])
+        )
         if not isinstance(response, AnswerOutput):
             response = AnswerOutput.model_validate(response)
         return {"answer": response}
@@ -82,12 +93,11 @@ def build_graph(services: GraphServices | None = None) -> Any:
         return {"grounded": grounded, "grounding_report": report}
 
     def widen_retrieval(state: GraphState) -> dict:
-        query = state.get("query", "")
-        rewritten = agents.rewrite(query)
+        query = state.get("retrieval_query", state.get("query", ""))
+        collection = state.get("collection", DEFAULT_COLLECTION)
         return {
             "retries": state.get("retries", 0) + 1,
-            "retrieval_query": rewritten,
-            "chunks": agents.retrieve(rewritten, settings.top_k_retry),
+            "chunks": agents.retrieve(query, settings.top_k_retry, collection),
         }
 
     def finalize(state: GraphState) -> dict:
@@ -108,6 +118,8 @@ def build_graph(services: GraphServices | None = None) -> Any:
         return "blocked" if state.get("input_verdict") == "blocked" else "safe"
 
     def scope_route(state: GraphState) -> str:
+        if state.get("input_verdict") == "blocked":
+            return "blocked"
         return "in_scope" if state.get("route") == "in_scope" else "off_topic"
 
     def grounding_route(state: GraphState) -> str:
@@ -133,7 +145,9 @@ def build_graph(services: GraphServices | None = None) -> Any:
     graph.add_conditional_edges("input_guard", input_route, {"blocked": "refuse", "safe": "router"})
     graph.add_edge("refuse", END)
     graph.add_conditional_edges(
-        "router", scope_route, {"in_scope": "retrieve", "off_topic": "decline"}
+        "router",
+        scope_route,
+        {"in_scope": "retrieve", "off_topic": "decline", "blocked": "refuse"},
     )
     graph.add_edge("decline", END)
     graph.add_edge("retrieve", "answer")
@@ -149,11 +163,18 @@ def build_graph(services: GraphServices | None = None) -> Any:
     return graph.compile()
 
 
-def run_query(query: str, services: GraphServices | None = None) -> GraphState:
-    """Execute a user query and return the final graph state."""
+def run_query(
+    query: str,
+    history: list[dict] | None = None,
+    collection: str = DEFAULT_COLLECTION,
+    services: GraphServices | None = None,
+) -> GraphState:
+    """Execute a user query against a session's collection and return the final graph state."""
     logger.info("run_query start: %r", query)
     with track_llm_calls() as call_count:
-        result = build_graph(services).invoke({"query": query, "retries": 0})
+        result = build_graph(services).invoke(
+            {"query": query, "retries": 0, "history": history or [], "collection": collection}
+        )
     result["llm_calls"] = call_count[0]
     logger.info(
         "run_query done: route=%s grounded=%s retries=%s llm_calls=%s",

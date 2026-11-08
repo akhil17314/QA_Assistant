@@ -16,10 +16,10 @@ def test_reingesting_uses_deterministic_ids(monkeypatch):
         def add_documents(self, documents, ids):
             calls.append((documents, ids))
 
-    monkeypatch.setattr("app.ingest.get_vector_store", lambda _: FakeStore())
+    monkeypatch.setattr("app.ingest.get_vector_store", lambda *_: FakeStore())
     chunks = [Chunk(text="text", source="notes.pdf", page=2)]
 
-    build_index(chunks, "unused")
-    build_index(chunks, "unused")
+    build_index(chunks, "session-a")
+    build_index(chunks, "session-a")
 
     assert calls[0][1] == calls[1][1] == ["notes.pdf-2-0"]
