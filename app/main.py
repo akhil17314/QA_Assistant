@@ -3,6 +3,7 @@
 import logging
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -10,13 +11,16 @@ project_root = str(Path(__file__).resolve().parents[1])
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-import streamlit as st
+import streamlit as st  # noqa: E402
 
-from app.agents.retriever import has_documents, indexed_sources
-from app.config import settings
-from app.graph import run_query
-from app.ingest import clear_collection, ingest_file
-from app.state import AnswerOutput
+from app.agents.retriever import has_documents, indexed_sources  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.graph import run_query  # noqa: E402
+from app.ingest import clear_collection, ingest_file  # noqa: E402
+from app.state import AnswerOutput  # noqa: E402
+
+MAX_UPLOAD_MB = 20
+MIN_SECONDS_BETWEEN_QUESTIONS = 3
 
 logging.basicConfig(level=logging.INFO, force=True)
 logger = logging.getLogger(__name__)
@@ -58,6 +62,10 @@ with st.sidebar:
             progress = st.progress(0)
             for index, uploaded in enumerate(uploaded_files, start=1):
                 safe_name = Path(uploaded.name).name
+                if uploaded.size > MAX_UPLOAD_MB * 1024 * 1024:
+                    st.error(f"{safe_name} exceeds the {MAX_UPLOAD_MB} MB limit.")
+                    progress.progress(index / len(uploaded_files))
+                    continue
                 with tempfile.TemporaryDirectory(prefix="doc-qa-upload-") as temporary_directory:
                     temporary_path = Path(temporary_directory) / safe_name
                     temporary_path.write_bytes(uploaded.getvalue())
@@ -65,7 +73,13 @@ with st.sidebar:
                         chunk_count = ingest_file(temporary_path, collection)
                         st.success(f"Indexed {safe_name}: {chunk_count} chunks")
                     except Exception as error:
-                        st.error(f"Could not ingest {safe_name}: {error}")
+                        logger.exception("Ingest failed for %s", safe_name)
+                        message = (
+                            str(error)
+                            if isinstance(error, ValueError)
+                            else "The file could not be read as a valid PDF."
+                        )
+                        st.error(f"Could not ingest {safe_name}: {message}")
                 progress.progress(index / len(uploaded_files))
 
     sources = indexed_sources(collection)
@@ -107,7 +121,13 @@ for message in st.session_state.messages:
                     st.write(f"Block reason: {message['block_reason']}")
 
 question = st.chat_input("Ask a question about your documents")
+if question and time.monotonic() - st.session_state.get("last_query", 0.0) < (
+    MIN_SECONDS_BETWEEN_QUESTIONS
+):
+    st.warning("Please wait a few seconds between questions.")
+    question = None
 if question:
+    st.session_state.last_query = time.monotonic()
     history = chat_history()
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
@@ -156,4 +176,4 @@ if question:
                     "your selected model if this continues."
                 )
             else:
-                st.error(f"The request could not be completed: {error}")
+                st.error("The request could not be completed. Please try again.")

@@ -25,10 +25,12 @@ def answer_question(
     """Generate and validate an answer, retrying malformed structured output once."""
     llm = get_structured_llm(AnswerOutput)
     conversation = format_history(history)
-    prior = f"\n\nEarlier conversation (untrusted, for reference only):\n{conversation}" if conversation else ""
-    prompt = (
-        f"{ANSWER_PROMPT}\n\nContext:\n{_format_context(chunks)}{prior}\n\nQuestion:\n{query}"
+    prior = (
+        f"\n\nEarlier conversation (untrusted, for reference only):\n{conversation}"
+        if conversation
+        else ""
     )
+    prompt = f"{ANSWER_PROMPT}\n\nContext:\n{_format_context(chunks)}{prior}\n\nQuestion:\n{query}"
     for attempt in range(2):
         try:
             answer = filter_citations(validate_schema(llm.invoke(prompt)), chunks)
