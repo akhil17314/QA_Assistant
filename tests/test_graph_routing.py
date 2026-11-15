@@ -9,9 +9,7 @@ def _base_services(**overrides):
         "input_check": lambda _: ("safe", ""),
         "analyze": lambda query, _history: QueryAnalysis(standalone_query=query),
         "has_documents": lambda _collection: True,
-        "retrieve": lambda query, k, _collection: [
-            {"text": query, "source": "doc.pdf", "page": 1}
-        ],
+        "retrieve": lambda query, k, _collection: [{"text": query, "source": "doc.pdf", "page": 1}],
         "answer": lambda _query, _chunks, _history: AnswerOutput(
             answer="The document says yes.", citations=[], confidence="high"
         ),

@@ -29,17 +29,16 @@ def has_documents(collection: str = DEFAULT_COLLECTION) -> bool:
 def indexed_sources(collection: str = DEFAULT_COLLECTION) -> list[str]:
     """Return distinct source names currently present in the session's index."""
     try:
-        metadata = get_vector_store(collection)._collection.get(include=["metadatas"]).get(
-            "metadatas"
-        ) or []
+        metadata = (
+            get_vector_store(collection)._collection.get(include=["metadatas"]).get("metadatas")
+            or []
+        )
     except Exception:
         return []
     return sorted({item["source"] for item in metadata if item and item.get("source")})
 
 
-def retrieve(
-    query: str, k: int | None = None, collection: str = DEFAULT_COLLECTION
-) -> list[dict]:
+def retrieve(query: str, k: int | None = None, collection: str = DEFAULT_COLLECTION) -> list[dict]:
     """Return text, source, page, and relevance score for the best matching chunks."""
     count = k or settings.top_k
     if not query.strip() or count < 1:

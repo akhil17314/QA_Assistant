@@ -1,12 +1,16 @@
 """PDF parsing, page-aware chunking, and deterministic Chroma indexing."""
 
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from app.config import settings
+
+
+MAX_PDF_PAGES = 300
 
 
 @dataclass(frozen=True)
@@ -81,15 +85,33 @@ _vector_store_lock = threading.Lock()
 DEFAULT_COLLECTION = "docs"
 
 
-@lru_cache(maxsize=None)
+MAX_OPEN_STORES = 20
+_open_stores: OrderedDict[tuple[str, str | None], Any] = OrderedDict()
+
+
 def _open_vector_store(collection_name: str, directory: str | None) -> Any:
     from langchain_chroma import Chroma
 
-    return Chroma(
+    key = (collection_name, directory)
+    store = _open_stores.get(key)
+    if store is not None:
+        _open_stores.move_to_end(key)
+        return store
+    store = Chroma(
         collection_name=collection_name,
         embedding_function=get_embeddings(),
         persist_directory=directory,
     )
+    _open_stores[key] = store
+    # Bound memory: abandoned in-memory sessions are evicted oldest-first.
+    while len(_open_stores) > MAX_OPEN_STORES:
+        (_, old_directory), old_store = _open_stores.popitem(last=False)
+        if old_directory is None:
+            try:
+                old_store.delete_collection()
+            except Exception:
+                pass
+    return store
 
 
 def get_vector_store(
@@ -139,6 +161,11 @@ def ingest_file(
     persist_directory: str | Path | None = None,
 ) -> int:
     """Parse, chunk, and index a PDF; return the number of chunks processed."""
-    chunks = chunk_pages(load_pdf(path))
+    pages = load_pdf(path)
+    if not pages:
+        raise ValueError("No extractable text found (scanned or image-only PDFs are unsupported).")
+    if len(pages) > MAX_PDF_PAGES:
+        raise ValueError(f"PDF has {len(pages)} text pages; the limit is {MAX_PDF_PAGES}.")
+    chunks = chunk_pages(pages)
     build_index(chunks, collection_name, persist_directory)
     return len(chunks)

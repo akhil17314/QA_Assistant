@@ -41,7 +41,6 @@ def build_graph(services: GraphServices | None = None) -> Any:
         verdict, reason = agents.input_check(query)
         return {"query": query, "input_verdict": verdict, "block_reason": reason}
 
-
     def refuse(state: GraphState) -> dict:
         reason = state.get("block_reason", "")
         response = f"I can't help with that request. {reason}".strip()
