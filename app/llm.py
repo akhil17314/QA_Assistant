@@ -42,6 +42,33 @@ class _CallCounter(BaseCallbackHandler):
 _call_counter = _CallCounter()
 
 
+def is_invalid_api_key_error(error: BaseException) -> bool:
+    """Detect Gemini API-key errors even when a framework wraps the original exception."""
+    pending = [error]
+    seen: set[int] = set()
+    markers = (
+        "api_key_invalid",
+        "api key invalid",
+        "api key not valid",
+        "invalid api key",
+        "api key is invalid",
+        "api key expired",
+        "access_token_type_unsupported",
+    )
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        message = " ".join((str(current), repr(current), *(str(arg) for arg in current.args))).lower()
+        if any(marker in message for marker in markers):
+            return True
+        for chained in (current.__cause__, current.__context__):
+            if isinstance(chained, BaseException):
+                pending.append(chained)
+    return False
+
+
 @contextmanager
 def track_llm_calls() -> Iterator[list[int]]:
     """Track actual LLM starts made inside the current synchronous request."""
@@ -81,7 +108,4 @@ def get_llm(model: str | None = None, temperature: float = 0.0) -> Any:
 def get_structured_llm(schema: type[SchemaT], model: str | None = None) -> Any:
     """Return a Gemini model that validates responses against a Pydantic schema."""
     structured_model = _create_chat_model(model, temperature=0).with_structured_output(schema)
-    return structured_model.with_config(callbacks=[_call_counter]).with_retry(
-        stop_after_attempt=5,
-        wait_exponential_jitter=True,
-    )
+    return structured_model.with_config(callbacks=[_call_counter])

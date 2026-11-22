@@ -4,7 +4,7 @@ import logging
 
 from app.guardrails.output_guard import filter_citations, redact_secrets, validate_schema
 from app.agents.router import format_history
-from app.llm import get_structured_llm
+from app.llm import get_structured_llm, is_invalid_api_key_error
 from app.prompts import ANSWER_PROMPT
 from app.state import AnswerOutput
 
@@ -33,7 +33,7 @@ def answer_question(
     prompt = f"{ANSWER_PROMPT}\n\nContext:\n{_format_context(chunks)}{prior}\n\nQuestion:\n{query}"
     for attempt in range(2):
         try:
-            answer = filter_citations(validate_schema(llm.invoke(prompt)), chunks)
+            answer = filter_citations(validate_schema(llm.invoke(prompt, max_retries=0)), chunks)
             return answer.model_copy(
                 update={
                     "answer": redact_secrets(answer.answer),
@@ -44,6 +44,8 @@ def answer_question(
                 }
             )
         except Exception as error:
+            if is_invalid_api_key_error(error):
+                raise
             logger.warning(
                 "Answer generation failed on attempt %s: %s: %s",
                 attempt + 1,

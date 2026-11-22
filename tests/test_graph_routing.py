@@ -19,10 +19,12 @@ def _base_services(**overrides):
     return GraphServices(**services)
 
 
+def _run_graph(services=None, **state):
+    return build_graph(services).invoke({"query": "q", "retries": 0, **state})
+
+
 def test_blocked_branch_skips_agents():
-    result = build_graph(_base_services(input_check=lambda _: ("blocked", "injection"))).invoke(
-        {"query": "unsafe", "retries": 0}
-    )
+    result = _run_graph(_base_services(input_check=lambda _: ("blocked", "injection")), query="unsafe")
     assert result["final_response"].startswith("I can't help")
     assert "route" not in result
 
@@ -31,14 +33,14 @@ def test_analysis_flagged_unsafe_is_refused():
     services = _base_services(
         analyze=lambda *_: QueryAnalysis(safe=False, reason="jailbreak attempt")
     )
-    result = build_graph(services).invoke({"query": "sneaky", "retries": 0})
+    result = _run_graph(services, query="sneaky")
     assert result["final_response"] == "I can't help with that request. jailbreak attempt"
     assert "chunks" not in result
 
 
 def test_off_topic_branch_declines():
     services = _base_services(analyze=lambda *_: QueryAnalysis(route="off_topic"))
-    result = build_graph(services).invoke({"query": "Tell me a joke", "retries": 0})
+    result = _run_graph(services, query="Tell me a joke")
     assert "questions about the documents" in result["final_response"]
 
 
@@ -46,14 +48,12 @@ def test_no_documents_skips_llm_analysis():
     def fail(*_):
         raise AssertionError("analysis must not run without documents")
 
-    result = build_graph(_base_services(has_documents=lambda _c: False, analyze=fail)).invoke(
-        {"query": "What does it say?", "retries": 0}
-    )
+    result = _run_graph(_base_services(has_documents=lambda _c: False, analyze=fail))
     assert "upload and ingest a PDF" in result["final_response"]
 
 
 def test_grounded_branch_finalizes():
-    result = build_graph(_base_services()).invoke({"query": "What does it say?", "retries": 0})
+    result = _run_graph(_base_services(), query="What does it say?")
     assert result["final_response"] == "The document says yes."
     assert result["grounded"] is True
 
@@ -64,7 +64,7 @@ def test_control_characters_are_removed_before_analysis():
         analyze=lambda query, _h: seen.append(query) or QueryAnalysis(route="off_topic")
     )
 
-    build_graph(services).invoke({"query": "What\x00 is documented?", "retries": 0})
+    _run_graph(services, query="What\x00 is documented?")
 
     assert seen == ["What is documented?"]
 
@@ -81,41 +81,33 @@ def test_history_and_collection_reach_agents_and_standalone_query_drives_retriev
     )
     history = [{"role": "user", "content": "What about timeouts?"}]
 
-    build_graph(services).invoke(
-        {"query": "and retries?", "retries": 0, "history": history, "collection": "session-1"}
-    )
+    _run_graph(services, query="and retries?", history=history, collection="session-1")
 
     assert calls["history"] == calls["answer_history"] == history
     assert calls["query"] == "standalone about timeouts"
     assert calls["collection"] == "session-1"
 
 
-def test_retry_then_grounded():
-    verdicts = iter([(False, "unsupported"), (True, "supported after retry")])
-    result = build_graph(_base_services(ground=lambda _answer, _chunks: next(verdicts))).invoke(
-        {"query": "What does it say?", "retries": 0}
-    )
-    assert result["retries"] == 1
-    assert result["grounded"] is True
-
-
-def test_retry_widens_retrieval_without_extra_llm_call():
+def test_retry_widens_retrieval_then_finalizes():
     ks = []
-    verdicts = iter([(False, "unsupported"), (True, "ok")])
+    verdicts = iter([(False, "unsupported"), (True, "supported after retry")])
     services = _base_services(
         retrieve=lambda query, k, _c: ks.append(k) or [{"text": "t", "source": "d", "page": 1}],
         ground=lambda _a, _c: next(verdicts),
         analyze=lambda query, _h: QueryAnalysis(standalone_query=query),
     )
-    build_graph(services).invoke({"query": "q", "retries": 0})
+    result = _run_graph(services)
+    assert result["retries"] == 1
+    assert result["grounded"] is True
     assert ks[1] > ks[0]
 
 
 def test_retry_exhausted_returns_fixed_fallback(monkeypatch):
     monkeypatch.setattr("app.graph.settings.max_retries", 1)
-    result = build_graph(
-        _base_services(ground=lambda _answer, _chunks: (False, "unsupported"))
-    ).invoke({"query": "What does it say?", "retries": 0})
+    result = _run_graph(
+        _base_services(ground=lambda _answer, _chunks: (False, "unsupported")),
+        query="What does it say?",
+    )
     assert result["retries"] == 1
     assert (
         result["final_response"]
