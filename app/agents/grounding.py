@@ -32,7 +32,8 @@ def check_grounding(answer: AnswerOutput, chunks: list[dict]) -> tuple[bool, str
     judge = get_structured_llm(GroundingVerdict, model=settings.judge_model)
     result = judge.invoke(
         f"{CLAIM_EXTRACTION_PROMPT}\n{GROUNDING_JUDGE_PROMPT}\n\n"
-        f"Answer:\n{answer.answer}\n\nDocument excerpts:\n{_format_chunks(chunks)}"
+        f"Answer:\n{answer.answer}\n\nDocument excerpts:\n{_format_chunks(chunks)}",
+        max_retries=0,
     )
     if not result.verdicts:
         return True, "No factual claims were identified."

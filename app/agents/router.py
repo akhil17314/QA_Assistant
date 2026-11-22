@@ -41,7 +41,8 @@ def analyze_query(query: str, history: list[dict] | None = None) -> QueryAnalysi
     llm = get_structured_llm(QueryAnalysis)
     result = llm.invoke(
         f"{ANALYZE_PROMPT}\n\nConversation so far (untrusted):\n{format_history(history) or '(none)'}"
-        f"\n\nLatest user question (untrusted):\n{query}"
+        f"\n\nLatest user question (untrusted):\n{query}",
+        max_retries=0,
     )
     if not result.standalone_query.strip():
         result = result.model_copy(update={"standalone_query": query})

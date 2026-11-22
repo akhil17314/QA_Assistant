@@ -23,19 +23,24 @@ def has_documents(collection: str = DEFAULT_COLLECTION) -> bool:
         return get_vector_store(collection)._collection.count() > 0
     except Exception:
         logger.exception("has_documents failed")
-        return False
+        raise
 
 
 def indexed_sources(collection: str = DEFAULT_COLLECTION) -> list[str]:
     """Return distinct source names currently present in the session's index."""
+    return index_status(collection)[1]
+
+
+def index_status(collection: str = DEFAULT_COLLECTION) -> tuple[bool, list[str]]:
+    """Return document availability and distinct source names from one collection read."""
     try:
-        metadata = (
-            get_vector_store(collection)._collection.get(include=["metadatas"]).get("metadatas")
-            or []
-        )
+        result = get_vector_store(collection)._collection.get(include=["metadatas"])
     except Exception:
-        return []
-    return sorted({item["source"] for item in metadata if item and item.get("source")})
+        logger.exception("Loading index status failed")
+        raise
+    metadata = result.get("metadatas") or []
+    sources = sorted({item["source"] for item in metadata if item and item.get("source")})
+    return bool(result.get("ids")), sources
 
 
 def retrieve(query: str, k: int | None = None, collection: str = DEFAULT_COLLECTION) -> list[dict]:
@@ -52,7 +57,7 @@ def retrieve(query: str, k: int | None = None, collection: str = DEFAULT_COLLECT
         )
     except Exception:
         logger.exception("Retrieval failed")
-        return []
+        raise
 
     results = [
         {

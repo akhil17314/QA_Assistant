@@ -13,10 +13,11 @@ if project_root not in sys.path:
 
 import streamlit as st  # noqa: E402
 
-from app.agents.retriever import has_documents, indexed_sources  # noqa: E402
+from app.agents.retriever import index_status  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.graph import run_query  # noqa: E402
 from app.ingest import clear_collection, ingest_file  # noqa: E402
+from app.llm import is_invalid_api_key_error  # noqa: E402
 from app.state import AnswerOutput  # noqa: E402
 
 MAX_UPLOAD_MB = 20
@@ -44,12 +45,41 @@ def chat_history() -> list[dict]:
     for index, message in enumerate(messages):
         if message["role"] == "assistant" and message.get("block_reason"):
             continue
+        if message["role"] == "assistant" and message.get("error"):
+            continue
         if message["role"] == "user" and index + 1 < len(messages):
             reply = messages[index + 1]
-            if reply["role"] == "assistant" and reply.get("block_reason"):
+            if reply["role"] == "assistant" and (
+                reply.get("block_reason") or reply.get("error")
+            ):
                 continue
         history.append({"role": message["role"], "content": message["content"]})
     return history
+
+
+def render_chat_message(message: dict) -> None:
+    """Render a chat message and any assistant details consistently."""
+    if message.get("error"):
+        st.error(message["content"])
+        return
+    st.markdown(message["content"])
+    if message["role"] != "assistant":
+        return
+
+    with st.expander("Sources"):
+        for citation in message.get("citations", []):
+            st.markdown(
+                f"**{citation['source']}**, page {citation['page']}  \n"
+                f"> {citation['snippet']}"
+            )
+        if not message.get("citations"):
+            st.caption("No document citations were returned.")
+    with st.expander("Trace"):
+        st.write(f"Route: {message.get('route', 'unknown')}")
+        st.write(f"Retries: {message.get('retries', 0)}")
+        st.write(f"Grounded: {'Yes' if message.get('grounded') else 'No'}")
+        if message.get("block_reason"):
+            st.write(f"Block reason: {message['block_reason']}")
 
 
 with st.sidebar:
@@ -70,7 +100,8 @@ with st.sidebar:
                     temporary_path = Path(temporary_directory) / safe_name
                     temporary_path.write_bytes(uploaded.getvalue())
                     try:
-                        chunk_count = ingest_file(temporary_path, collection)
+                        with st.spinner(f"Reading and indexing {safe_name}..."):
+                            chunk_count = ingest_file(temporary_path, collection)
                         st.success(f"Indexed {safe_name}: {chunk_count} chunks")
                     except Exception as error:
                         logger.exception("Ingest failed for %s", safe_name)
@@ -82,12 +113,16 @@ with st.sidebar:
                         st.error(f"Could not ingest {safe_name}: {message}")
                 progress.progress(index / len(uploaded_files))
 
-    sources = indexed_sources(collection)
+    try:
+        documents_available, sources = index_status(collection)
+    except Exception:
+        documents_available, sources = None, None
+        st.error("Could not load indexed files. Please try again.")
     st.subheader("Indexed files")
     if sources:
         for source in sources:
             st.write(f"- {source}")
-    else:
+    elif sources is not None:
         st.caption("No PDFs indexed yet.")
 
     if st.button("Clear index", use_container_width=True):
@@ -100,25 +135,12 @@ with st.sidebar:
 
 if not settings.google_api_key:
     st.error("GOOGLE_API_KEY is missing. Add it to your .env file to enable chat.")
-if not has_documents(collection):
+if documents_available is False:
     st.info("Upload and ingest a PDF to start asking questions.")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        if message["role"] == "assistant":
-            with st.expander("Sources"):
-                for citation in message.get("citations", []):
-                    st.markdown(
-                        f"**{citation['source']}**, page {citation['page']}  \n"
-                        f"> {citation['snippet']}"
-                    )
-            with st.expander("Trace"):
-                st.write(f"Route: {message.get('route', 'unknown')}")
-                st.write(f"Retries: {message.get('retries', 0)}")
-                st.write(f"Grounded: {'Yes' if message.get('grounded') else 'No'}")
-                if message.get("block_reason"):
-                    st.write(f"Block reason: {message['block_reason']}")
+        render_chat_message(message)
 
 question = st.chat_input("Ask a question about your documents")
 if question and time.monotonic() - st.session_state.get("last_query", 0.0) < (
@@ -134,46 +156,40 @@ if question:
         st.markdown(question)
     with st.chat_message("assistant"):
         try:
-            result = run_query(question, history=history, collection=collection)
+            with st.spinner("Searching your documents and checking the answer..."):
+                result = run_query(question, history=history, collection=collection)
             response = result.get("final_response", "No response was produced.")
-            st.markdown(response)
             answer = result.get("answer")
             citations = answer.citations if isinstance(answer, AnswerOutput) else []
             citations_data = [citation.model_dump() for citation in citations]
-            with st.expander("Sources"):
-                if citations_data:
-                    for citation in citations_data:
-                        st.markdown(
-                            f"**{citation['source']}**, page {citation['page']}  \n"
-                            f"> {citation['snippet']}"
-                        )
-                else:
-                    st.caption("No document citations were returned.")
-            with st.expander("Trace"):
-                st.write(f"Route: {result.get('route', 'unknown')}")
-                st.write(f"Retries: {result.get('retries', 0)}")
-                st.write(f"Grounded: {'Yes' if result.get('grounded') else 'No'}")
-                if result.get("block_reason"):
-                    st.write(f"Block reason: {result['block_reason']}")
-            st.session_state.messages.append(
-                {
-                    "role": "assistant",
-                    "content": response,
-                    "citations": citations_data,
-                    "route": result.get("route", "unknown"),
-                    "retries": result.get("retries", 0),
-                    "grounded": result.get("grounded", False),
-                    "block_reason": result.get("block_reason", ""),
-                }
-            )
+            assistant_message = {
+                "role": "assistant",
+                "content": response,
+                "citations": citations_data,
+                "route": result.get("route", "unknown"),
+                "retries": result.get("retries", 0),
+                "grounded": result.get("grounded", False),
+                "block_reason": result.get("block_reason", ""),
+            }
+            st.session_state.messages.append(assistant_message)
+            render_chat_message(assistant_message)
         except Exception as error:
             logger.exception("Query failed for question: %r", question)
-            if "429" in str(error) or "rate" in str(error).lower():
-                st.error(
+            error_text = str(error).lower()
+            if is_invalid_api_key_error(error):
+                error_message = (
+                    "Gemini rejected the API key. Check GOOGLE_API_KEY in your .env file, "
+                    "then restart the Streamlit app and try again."
+                )
+            elif "429" in error_text or "rate" in error_text:
+                error_message = (
                     "Gemini's free-tier rate limit was reached. A document question can use "
                     "several model requests; wait about a minute before retrying and avoid "
                     "resubmitting while the request is still running. Check the quota for "
                     "your selected model if this continues."
                 )
             else:
-                st.error("The request could not be completed. Please try again.")
+                error_message = "The request could not be completed. Please try again."
+            assistant_message = {"role": "assistant", "content": error_message, "error": True}
+            st.session_state.messages.append(assistant_message)
+            render_chat_message(assistant_message)

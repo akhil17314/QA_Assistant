@@ -1,6 +1,10 @@
+from unittest.mock import Mock
+
+import pytest
 from pydantic import BaseModel
 
-from app.llm import _call_counter, get_structured_llm, track_llm_calls
+from app.agents.answerer import answer_question
+from app.llm import _call_counter, get_structured_llm, is_invalid_api_key_error, track_llm_calls
 
 
 def test_model_callback_counts_calls_only_inside_request_scope():
@@ -13,28 +17,35 @@ def test_model_callback_counts_calls_only_inside_request_scope():
         assert next_counter == [0]
 
 
-def test_structured_output_is_configured_before_retry(monkeypatch):
-    events = []
-
-    class StructuredRunnable:
-        def with_config(self, **kwargs):
-            events.append("config")
-            return self
-
-        def with_retry(self, **kwargs):
-            events.append("retry")
-            return self
-
-    class ChatModel:
-        def with_structured_output(self, schema):
-            events.append(("structured", schema))
-            return StructuredRunnable()
-
+def test_structured_output_is_configured_without_broad_retry(monkeypatch):
     class OutputSchema(BaseModel):
         result: str
 
-    monkeypatch.setattr("app.llm._create_chat_model", lambda model, temperature: ChatModel())
+    runnable, model = Mock(), Mock()
+    runnable.with_config.return_value = runnable
+    model.with_structured_output.return_value = runnable
+    monkeypatch.setattr("app.llm._create_chat_model", lambda *_, **__: model)
 
-    get_structured_llm(OutputSchema)
+    assert get_structured_llm(OutputSchema) is runnable
+    model.with_structured_output.assert_called_once_with(OutputSchema)
+    runnable.with_config.assert_called_once()
+    runnable.with_retry.assert_not_called()
 
-    assert events == [("structured", OutputSchema), "config", "retry"]
+
+
+def test_invalid_api_key_is_detected_through_wrapped_exception():
+    wrapped = RuntimeError("request failed")
+    wrapped.__cause__ = ValueError(
+        "Unauthenticated: 401 API key not valid; reason: ACCESS_TOKEN_TYPE_UNSUPPORTED"
+    )
+
+    assert is_invalid_api_key_error(wrapped)
+
+
+def test_answerer_propagates_invalid_api_key(monkeypatch):
+    runnable = Mock()
+    runnable.invoke.side_effect = RuntimeError("API key not valid. Please pass a valid API key.")
+    monkeypatch.setattr("app.agents.answerer.get_structured_llm", lambda *_: runnable)
+
+    with pytest.raises(RuntimeError, match="API key not valid"):
+        answer_question("question", [{"text": "context"}])
